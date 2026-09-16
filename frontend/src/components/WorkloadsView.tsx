@@ -129,7 +129,7 @@ export default function WorkloadsView({ accelProcs }: Props) {
                       {c ? `${(c.score * 100).toFixed(0)}%` : '…'}
                     </td>
                     <td className="px-3 py-1.5 text-faint max-w-[14rem] truncate" title={c?.hits?.map(h => h.rule).join(', ') ?? ''}>
-                      {c ? c.hits.map(h => h.signal).filter(Boolean).slice(0, 3).join(' · ') : '—'}
+                      {c?.hits?.map(h => h.signal).filter(Boolean).slice(0, 3).join(' · ') || '—'}
                     </td>
                   </tr>
                 );

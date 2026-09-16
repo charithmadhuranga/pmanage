@@ -155,5 +155,5 @@ export interface ClassifiedProc {
   pid: number;
   kind: WorkloadKind;
   score: number;
-  hits: { rule: string; signal: string; score: number }[];
+  hits: { rule: string; signal: string; score: number }[] | null;
 }
