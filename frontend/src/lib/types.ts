@@ -101,11 +101,11 @@ export interface Toast {
 /* Sources/settings view */
 export interface SourceInfo {
   name: string;
-  kind: 'gpu' | 'npu' | 'tpu';
+  kind: string;
   enabled: boolean;
   detected: boolean;
   deviceCount: number;
-  capabilities: string[];
+  capabilities: string[] | null;
 }
 
 /* Phase 6 — history, alerts, workload classifier */

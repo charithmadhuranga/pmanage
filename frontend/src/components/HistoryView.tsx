@@ -35,10 +35,11 @@ export default function HistoryView({ devices }: Props) {
   // device list first-seen from history, fallback to current live devices
   useEffect(() => {
     let cancelled = false;
-    HistoryService.Devices().then((ids: string[]) => {
+    HistoryService.Devices().then((ids) => {
       if (cancelled) return;
-      setDevList(ids);
-      if (!selected && ids.length) setSelected(ids[0]);
+      const list = ids ?? [];
+      setDevList(list);
+      if (!selected && list.length) setSelected(list[0]);
     }).catch(() => { /* bindings not ready */ });
     return () => { cancelled = true; };
   }, []);
