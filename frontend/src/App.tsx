@@ -18,6 +18,7 @@ import useServerMode from './hooks/useServerMode';
 import { Service as ProcService } from '../bindings/pmanage/pkg/process';
 
 import type { TelemetrySnapshot, DeviceMetrics, ProcUsage, MergedProcess, AlertFire } from './lib/types';
+import { shortName } from './lib/types';
 
 const SPARK_LEN = 60;
 const POLL_MS = 3000;
@@ -306,7 +307,7 @@ export default function App() {
                       )}
                       {[...accelProcs].sort((a, b) => b.utilPct - a.utilPct).map(p => (
                         <tr key={p.pid} className="border-b border-hairline/50 hover:bg-white/[0.02]">
-                          <td className="px-3 py-1.5 text-zinc-200 font-medium">{p.name}</td>
+                          <td className="px-3 py-1.5 text-zinc-200 font-medium" title={p.name}>{shortName(p.name)}</td>
                           <td className="px-3 py-1.5 text-faint tabular-nums">{p.pid}</td>
                           <td className="px-3 py-1.5">
                             <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium"
