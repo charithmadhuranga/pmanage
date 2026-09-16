@@ -20,7 +20,7 @@ export default function StatusBar({ deviceCount, gpuUtil, npuUtil, tpuUtil }: Pr
       </>}
       {tpuUtil !== null && <>
         <span className="text-hairline-strong">·</span>
-        <span>TPU N/A</span>
+        <span>TPU {tpuUtil.toFixed(0)}%</span>
       </>}
       <span className="ml-auto text-faint">v0.1.0</span>
     </footer>

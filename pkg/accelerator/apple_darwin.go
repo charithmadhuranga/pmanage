@@ -60,12 +60,17 @@ func (a *AppleSource) Detect() bool {
 	a.devices = a.devices[:0]
 	a.hasANE = false
 	for i, g := range gpus {
+		name := g.Model
+		if name == "" {
+			name = friendlyAppleName(g.Name)
+		}
 		a.devices = append(a.devices, DeviceInfo{
-			ID:     fmt.Sprintf("gpu%d", i),
-			Name:   friendlyAppleName(g.Name),
-			Vendor: "Apple",
-			Kind:   GPU,
-			Driver: "AGX",
+			ID:      fmt.Sprintf("gpu%d", i),
+			Name:    name,
+			Vendor:  "Apple",
+			Kind:    GPU,
+			Driver:  "AGX",
+			Version: fmt.Sprintf("%d cores", g.CoreCount),
 		})
 	}
 	if ane.Found {

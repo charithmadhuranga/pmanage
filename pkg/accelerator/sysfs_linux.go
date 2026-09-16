@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // kernelVersion returns the running kernel release (e.g. "6.7.9").
@@ -115,4 +116,39 @@ func drmDevicePath(cardPath string) (string, error) {
 		return cardDev, nil
 	}
 	return "", fmt.Errorf("no device node for %s", cardPath)
+}
+
+// readSysfsFloat reads a sysfs file at the given full path and returns a float64.
+// Used by optional vendor sources (Adreno, Ascend, VideoCore, Tenstorrent) that
+// don't follow the classPath+filename two-arg convention.
+func readSysfsFloat(fullPath string) (float64, bool) {
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return 0, false
+	}
+	s := strings.TrimSpace(string(data))
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// readSysfsUint64 reads a sysfs file at the given full path and returns a uint64.
+func readSysfsUint64(fullPath string) (uint64, bool) {
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return 0, false
+	}
+	s := strings.TrimSpace(string(data))
+	v, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// unixNow returns the current time as milliseconds since epoch.
+func unixNow() int64 {
+	return time.Now().UnixMilli()
 }

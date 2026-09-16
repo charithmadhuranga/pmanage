@@ -12,3 +12,8 @@ func PlatformSources() []AcceleratorSource {
 	}
 	return out
 }
+
+// OptionalSources returns detect-gated optional accelerators on Windows.
+func OptionalSources() []AcceleratorSource {
+	return nil
+}

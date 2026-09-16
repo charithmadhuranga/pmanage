@@ -27,6 +27,8 @@ typedef struct __IOReportSubscription *IOReportSubscriptionRef;
 
 typedef struct {
 	char name[256];
+	char model[256];
+	int coreCount;
 	double devUtil;
 	double renUtil;
 	double tilUtil;
@@ -80,6 +82,22 @@ static int agpu_read(int idx, agpu_stat *out) {
 	int ret = -1;
 	while ((svc = IOIteratorNext(iter)) != IO_OBJECT_NULL) {
 		if (cur == idx) {
+			// Read model name
+			CFTypeRef modelProp = IORegistryEntryCreateCFProperty(svc, CFSTR("model"), kCFAllocatorDefault, 0);
+			if (modelProp && CFGetTypeID(modelProp) == CFStringGetTypeID()) {
+				CFStringGetCString((CFStringRef)modelProp, out->model, sizeof(out->model)-1, kCFStringEncodingUTF8);
+			}
+			if (modelProp) CFRelease(modelProp);
+
+			// Read gpu-core-count
+			CFTypeRef coreProp = IORegistryEntryCreateCFProperty(svc, CFSTR("gpu-core-count"), kCFAllocatorDefault, 0);
+			if (coreProp && CFGetTypeID(coreProp) == CFNumberGetTypeID()) {
+				long long cc;
+				if (CFNumberGetValue((CFNumberRef)coreProp, kCFNumberSInt64Type, &cc))
+					out->coreCount = (int)cc;
+			}
+			if (coreProp) CFRelease(coreProp);
+
 			CFTypeRef ps = IORegistryEntryCreateCFProperty(svc, CFSTR("PerformanceStatistics"), kCFAllocatorDefault, 0);
 			if (ps && CFGetTypeID(ps) == CFDictionaryGetTypeID()) {
 				out->hasPerfStats = 1;
@@ -346,6 +364,8 @@ import (
 
 type appleGPUStat struct {
 	Name        string
+	Model       string
+	CoreCount   int
 	DevUtil     float64
 	RenUtil     float64
 	TilUtil     float64
@@ -421,8 +441,14 @@ func appleGPUs() []appleGPUStat {
 		if int(C.agpu_read(C.int(i), &c)) != 0 {
 			continue
 		}
+		model := C.GoString(&c.model[0])
+		if model == "" {
+			model = C.GoString(&c.name[0])
+		}
 		out = append(out, appleGPUStat{
 			Name:        C.GoString(&c.name[0]),
+			Model:       model,
+			CoreCount:   int(c.coreCount),
 			DevUtil:     float64(c.devUtil),
 			RenUtil:     float64(c.renUtil),
 			TilUtil:     float64(c.tilUtil),

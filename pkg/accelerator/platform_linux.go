@@ -17,3 +17,15 @@ func PlatformSources() []AcceleratorSource {
 		NewHailoSource(),
 	}
 }
+
+// OptionalSources returns detect-gated optional accelerators that may or may
+// not be present on a given Linux host. Each is registered only when Detect()
+// succeeds, avoiding noisy empty sources on machines without the hardware.
+func OptionalSources() []AcceleratorSource {
+	return []AcceleratorSource{
+		NewAdrenoSource(),
+		NewAscendSource(),
+		NewVideoCoreSource(),
+		NewTenstorrentSource(),
+	}
+}

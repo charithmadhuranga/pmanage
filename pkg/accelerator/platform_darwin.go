@@ -12,3 +12,9 @@ func PlatformSources() []AcceleratorSource {
 	}
 	return sources
 }
+
+// OptionalSources returns detect-gated optional accelerators on darwin.
+// Currently empty — all Apple sources are in PlatformSources.
+func OptionalSources() []AcceleratorSource {
+	return nil
+}
