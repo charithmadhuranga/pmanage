@@ -6,9 +6,11 @@
 APP_NAME    := pmanage
 BIN_DIR     := bin
 GO          := go
+GOBIN       := $(shell $(GO) env GOPATH)/bin
 NPM         := npm
 VITE_PORT   ?= 9245
 GOOS        ?= $(shell uname -s | tr '[:upper:]' '[:lower:]')
+PATH        := $(GOBIN):$(PATH)
 
 # CGO flags for macOS (Apple Silicon IOKit/IOReport)
 CGO_CFLAGS  ?= -mmacosx-version-min=12.0
