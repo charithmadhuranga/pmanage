@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 
 import type { MergedProcess } from '../lib/types';
-import { hasProcValid } from '../lib/types';
+import { hasProcValid, shortName } from '../lib/types';
 
 interface Props {
   procs: MergedProcess[];
@@ -195,7 +195,7 @@ export default function ProcessTable({ procs, selection, onSelect, onAction }: P
                     />
                   </td>
                   <td className="px-2 py-1 text-zinc-300 tabular-nums">{p.pid}</td>
-                  <td className="px-2 py-1 text-zinc-100 font-medium truncate max-w-[200px]" title={p.name}>{p.name}</td>
+                  <td className="px-2 py-1 text-zinc-100 font-medium truncate max-w-[200px]" title={p.name}>{shortName(p.name)}</td>
                   <td className={`px-2 py-1 text-[10px] uppercase ${statusColor(p.status)}`}>{p.status}</td>
                   <td className="px-2 py-1 text-right tabular-nums text-zinc-200">{p.cpu.toFixed(1)}</td>
                   <td className="px-2 py-1 text-right tabular-nums text-zinc-300">{fmtBytes(p.memBytes)}</td>

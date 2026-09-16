@@ -157,3 +157,14 @@ export interface ClassifiedProc {
   score: number;
   hits: { rule: string; signal: string; score: number }[] | null;
 }
+
+export function shortName(name: string): string {
+  if (!name) return name;
+  // Strip .app bundle paths: /Applications/Foo.app/Contents/... → Foo
+  const appMatch = name.match(/\/([^/]+)\.app\//);
+  if (appMatch) return appMatch[1];
+  // Strip directory prefix: /usr/bin/foo → foo
+  const base = name.split('/').pop() ?? name;
+  // Strip common suffixes: "Google Chrome Helper" stays, "foo-helper" stays
+  return base;
+}

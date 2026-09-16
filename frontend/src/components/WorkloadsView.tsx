@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Service as ClassifyService } from '../../bindings/pmanage/pkg/classify';
 
 import type { ProcUsage, ClassifiedProc, WorkloadKind } from '../lib/types';
+import { shortName } from '../lib/types';
 
 const KIND_META: Record<WorkloadKind, { label: string; color: string }> = {
   training:  { label: 'Training',  color: '#38bdf8' },
@@ -121,7 +122,7 @@ export default function WorkloadsView({ accelProcs }: Props) {
                         {meta.label}
                       </span>
                     </td>
-                    <td className="px-3 py-1.5 text-zinc-200 font-medium">{proc.name}</td>
+                    <td className="px-3 py-1.5 text-zinc-200 font-medium" title={proc.name}>{shortName(proc.name)}</td>
                     <td className="px-3 py-1.5 text-faint tabular-nums">{proc.pid}</td>
                     <td className="px-3 py-1.5 text-faint tabular-nums">{proc.deviceId}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums text-zinc-200">{proc.utilPct.toFixed(0)}%</td>
