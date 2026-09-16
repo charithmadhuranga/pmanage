@@ -1,4 +1,5 @@
 import type { DeviceMetrics } from '../lib/types';
+import { hasValid } from '../lib/types';
 
 interface Props {
   device: DeviceMetrics;
@@ -59,8 +60,8 @@ export default function DeviceCard({ device }: Props) {
           <span className={`w-2 h-2 rounded-full ${statusColor(device.status)}`} />
           <span className="text-xs font-medium text-zinc-100 truncate max-w-[160px]">{device.deviceId}</span>
         </div>
-        {!isNA && (
-          <span className="text-[10px] text-faint num">{device.tempC > 0 ? `${device.tempC.toFixed(0)}°C` : ''}</span>
+        {!isNA && hasValid(device, 'temp') && device.tempC > 0 && (
+          <span className="text-[10px] text-faint num">{device.tempC.toFixed(0)}°C</span>
         )}
       </div>
 
@@ -89,7 +90,7 @@ export default function DeviceCard({ device }: Props) {
 
           {/* Memory */}
           <div className="text-[11px] text-faint">
-            {device.vramTotal > 0 ? (
+            {hasValid(device, 'vramTotal') && device.vramTotal > 0 ? (
               <>{formatBytes(device.vramUsed)} / {formatBytes(device.vramTotal)}</>
             ) : (
               <span className="text-faint/60">Shared memory</span>
@@ -98,8 +99,8 @@ export default function DeviceCard({ device }: Props) {
 
           {/* Power / Clock */}
           <div className="flex items-center justify-between text-[10px] text-faint/80">
-            {device.powerW > 0 && <span>{device.powerW.toFixed(0)}W</span>}
-            {device.clockMhz > 0 && <span>{device.clockMhz} MHz</span>}
+            {hasValid(device, 'power') && device.powerW > 0 && <span>{device.powerW.toFixed(0)}W</span>}
+            {hasValid(device, 'clock') && device.clockMhz > 0 && <span>{device.clockMhz} MHz</span>}
           </div>
         </>
       )}

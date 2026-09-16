@@ -18,6 +18,14 @@ export interface DeviceMetrics {
   fanPct: number;
   status: string;
   minKernel?: string;
+  memUtilRate?: number;
+  effectiveLoad?: number;
+  powerMaxW?: number;
+  validFields?: string[];
+}
+
+export function hasValid(device: DeviceMetrics, field: string): boolean {
+  return device.validFields?.includes(field) ?? false;
 }
 
 export interface ProcUsage {
@@ -27,6 +35,16 @@ export interface ProcUsage {
   vramUsed: number;
   utilPct: number;
   engine?: Record<string, number>;
+  username?: string;
+  cpuUsage?: number;
+  memResident?: number;
+  memVirtual?: number;
+  type?: string;
+  validFields?: string[];
+}
+
+export function hasProcValid(proc: ProcUsage, field: string): boolean {
+  return proc.validFields?.includes(field) ?? false;
 }
 
 export interface TelemetrySnapshot {

@@ -92,28 +92,39 @@ func (s *AmdgpuSource) Sample(ctx context.Context) (Sample, error) {
 
 		if busy, err := sysfsUint64(d.devicePath, "device/gpu_busy_percent"); err == nil {
 			dm.UtilizationPct = float64(busy)
+			dm.Set(ValidUtilization)
 		}
 		if vramTotal, err := sysfsUint64(d.devicePath, "device/mem_info_vram_total"); err == nil {
 			dm.VRAMTotal = vramTotal
+			dm.Set(ValidVRAMTotal)
 		}
 		if vramUsed, err := sysfsUint64(d.devicePath, "device/mem_info_vram_used"); err == nil {
 			dm.VRAMUsed = vramUsed
+			dm.Set(ValidVRAMUsed)
+		}
+		if dm.IsValid(ValidVRAMTotal) && dm.VRAMTotal > 0 {
+			dm.MemUtilRate = float64(dm.VRAMUsed) * 100.0 / float64(dm.VRAMTotal)
+			dm.Set(ValidMemUtilRate)
 		}
 		hwmonGlob := d.devicePath + "/device/hwmon/hwmon*"
 		if hwmonPaths, _ := filepath.Glob(hwmonGlob); len(hwmonPaths) > 0 {
 			hwmon := hwmonPaths[0]
 			if t, err := sysfsFloat64(hwmon, "temp1_input"); err == nil {
 				dm.TemperatureC = t / 1000.0
+				dm.Set(ValidTemperature)
 			}
 			if p, err := sysfsUint64(hwmon, "power1_average"); err == nil {
 				dm.PowerW = float64(p) / 1e6
+				dm.Set(ValidPower)
 			}
 			if f, err := sysfsUint64(hwmon, "fan1_input"); err == nil {
 				dm.FanSpeedPct = float64(f) / 100.0
+				dm.Set(ValidFanSpeed)
 			}
 		}
 		if clk := parseSclk(d.devicePath); clk > 0 {
 			dm.ClockMHz = clk
+			dm.Set(ValidClock)
 		}
 		sample.Devices = append(sample.Devices, dm)
 

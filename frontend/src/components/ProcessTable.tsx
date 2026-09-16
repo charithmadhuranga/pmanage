@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 
 import type { MergedProcess } from '../lib/types';
+import { hasProcValid } from '../lib/types';
 
 interface Props {
   procs: MergedProcess[];
@@ -201,10 +202,10 @@ export default function ProcessTable({ procs, selection, onSelect, onAction }: P
                   <td className="px-2 py-1 text-right tabular-nums text-zinc-400">{p.threads}</td>
                   <td className="px-2 py-1 text-right tabular-nums text-zinc-500">{fmtElapsed(p.elapsedSec)}</td>
                   <td className="px-2 py-1 text-right tabular-nums text-zinc-200">
-                    {accel ? `${accel.utilPct.toFixed(0)}%` : '—'}
+                    {accel && hasProcValid(accel, 'util') ? `${accel.utilPct.toFixed(0)}%` : '—'}
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums text-zinc-300">
-                    {accel?.vramUsed ? `${(accel.vramUsed / 1e9).toFixed(2)}G` : '—'}
+                    {accel && hasProcValid(accel, 'vramUsed') && accel.vramUsed > 0 ? `${(accel.vramUsed / 1e9).toFixed(2)}G` : '—'}
                   </td>
                   <td className="px-2 py-1" onClick={e => e.stopPropagation()}>
                     <button

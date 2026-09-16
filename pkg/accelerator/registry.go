@@ -2,6 +2,7 @@ package accelerator
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -145,8 +146,51 @@ func (r *Registry) SampleAll(ctx context.Context) Sample {
 		all.Devices = append(all.Devices, sample.Devices...)
 		all.Procs = append(all.Procs, sample.Procs...)
 	}
+
+	// Compute effective load for all devices (nvtop technique).
+	for i := range all.Devices {
+		dm := &all.Devices[i]
+		powerMax := estimatePowerCap(dm)
+		if powerMax > 0 && dm.IsValid(ValidPower) {
+			dm.PowerMaxW = powerMax
+			dm.Set(ValidPowerMax)
+			dm.EffectiveLoad = EffectiveLoad(dm.UtilizationPct, dm.PowerW, powerMax)
+			dm.Set(ValidEffectiveLoad)
+		}
+		// Build JSON-serialized valid fields list for the frontend.
+		dm.BuildValidFields()
+	}
+
+	// Build valid fields for per-process entries.
+	for i := range all.Procs {
+		all.Procs[i].BuildValidFields()
+	}
+
 	all.Timestamp = time.Now().UnixMilli()
 	return all
+}
+
+// estimatePowerCap returns a reasonable TDP estimate for the device based on
+// vendor/device naming heuristics. Returns 0 when unknown (honest N/A).
+func estimatePowerCap(dm *DeviceMetrics) float64 {
+	id := dm.DeviceID
+	switch {
+	// NVIDIA datacenter GPUs
+	case strings.HasPrefix(id, "gpu0") && dm.IsValid(ValidPowerMax) && dm.PowerMaxW > 0:
+		return dm.PowerMaxW // source already provided it
+	case strings.Contains(id, "nvidia") || strings.Contains(strings.ToLower(id), "nvidia"):
+		return 300 // conservative TDP estimate for NVIDIA GPUs
+	case strings.HasPrefix(id, "gpu0"):
+		return 250 // generic NVIDIA
+	// AMD
+	case strings.HasPrefix(id, "gpu1") || strings.Contains(strings.ToLower(id), "amd"):
+		return 300
+	// Intel
+	case strings.HasPrefix(id, "gpu2") || strings.Contains(strings.ToLower(id), "intel"):
+		return 150
+	default:
+		return 0 // unknown — don't fabricate
+	}
 }
 
 func (r *Registry) DetectedSources() []AcceleratorSource {

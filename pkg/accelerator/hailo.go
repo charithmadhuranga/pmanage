@@ -136,12 +136,32 @@ func (s *HailoSource) Sample(ctx context.Context) (Sample, error) {
 			// NNC utilization is the primary GPU-like metric
 			if m.nncUtil >= 0 {
 				dm.UtilizationPct = m.nncUtil
+				dm.Set(ValidUtilization)
 			}
-			dm.TemperatureC = m.tempC
-			dm.PowerW = m.powerW
-			dm.VRAMUsed = m.ramUsedBytes
-			dm.VRAMTotal = m.ramTotalBytes
-			dm.ClockMHz = d.clockMHz // from identify --extended
+			if m.tempC > 0 {
+				dm.TemperatureC = m.tempC
+				dm.Set(ValidTemperature)
+			}
+			if m.powerW > 0 {
+				dm.PowerW = m.powerW
+				dm.Set(ValidPower)
+			}
+			if m.ramUsedBytes > 0 {
+				dm.VRAMUsed = m.ramUsedBytes
+				dm.Set(ValidVRAMUsed)
+			}
+			if m.ramTotalBytes > 0 {
+				dm.VRAMTotal = m.ramTotalBytes
+				dm.Set(ValidVRAMTotal)
+				if dm.VRAMTotal > 0 {
+					dm.MemUtilRate = float64(dm.VRAMUsed) * 100.0 / float64(dm.VRAMTotal)
+					dm.Set(ValidMemUtilRate)
+				}
+			}
+			if d.clockMHz > 0 {
+				dm.ClockMHz = d.clockMHz
+				dm.Set(ValidClock)
+			}
 			dm.Status = "ok"
 		}
 		sample.Devices = append(sample.Devices, dm)

@@ -128,27 +128,39 @@ func (s *SmiSource) Sample(ctx context.Context) (Sample, error) {
 			//     [5]temp [6]power [7]clock [8]maxclock [9]fan
 			if v, ok := smiFloat(r[2]); ok {
 				dm.UtilizationPct = v
+				dm.Set(ValidUtilization)
 			}
 			if v, ok := smiUint(r[3]); ok {
 				dm.VRAMUsed = v * 1024 * 1024 // MiB -> bytes
+				dm.Set(ValidVRAMUsed)
 			}
 			if v, ok := smiUint(r[4]); ok {
 				dm.VRAMTotal = v * 1024 * 1024
+				dm.Set(ValidVRAMTotal)
+				if dm.VRAMTotal > 0 {
+					dm.MemUtilRate = float64(dm.VRAMUsed) * 100.0 / float64(dm.VRAMTotal)
+					dm.Set(ValidMemUtilRate)
+				}
 			}
 			if v, ok := smiFloat(r[5]); ok {
 				dm.TemperatureC = v
+				dm.Set(ValidTemperature)
 			}
 			if v, ok := smiFloat(r[6]); ok {
 				dm.PowerW = v
+				dm.Set(ValidPower)
 			}
 			if v, ok := smiUint(r[7]); ok {
 				dm.ClockMHz = uint32(v)
+				dm.Set(ValidClock)
 			}
 			if v, ok := smiUint(r[8]); ok {
 				dm.ClockMaxMHz = uint32(v)
+				dm.Set(ValidClockMax)
 			}
 			if v, ok := smiFloat(r[9]); ok {
 				dm.FanSpeedPct = v
+				dm.Set(ValidFanSpeed)
 			}
 			break
 		}
@@ -166,12 +178,14 @@ func (s *SmiSource) Sample(ctx context.Context) (Sample, error) {
 			if err1 != nil || err2 != nil {
 				continue
 			}
-			sample.Procs = append(sample.Procs, ProcUsage{
+			pu := ProcUsage{
 				PID:      int32(pid),
 				Name:     strings.TrimSpace(r[1]),
 				DeviceID: s.info[0].ID,
 				VRAMUsed: uint64(mem * 1024 * 1024),
-			})
+			}
+			pu.Set(ValidVRAMUsed)
+			sample.Procs = append(sample.Procs, pu)
 		}
 	}
 	return sample, nil

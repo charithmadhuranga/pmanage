@@ -255,47 +255,65 @@ func (n *NvidiaSource) Sample(ctx context.Context) (Sample, error) {
 
 		if u, ret := n.nv.DeviceGetUtilizationRates(i); ret == nvml.SUCCESS {
 			dm.UtilizationPct = float64(u.Gpu)
+			dm.Set(ValidUtilization)
 		}
 		if mem, ret := n.nv.DeviceGetMemoryInfo(i); ret == nvml.SUCCESS {
 			dm.VRAMUsed = mem.Used
 			dm.VRAMTotal = mem.Total
+			dm.Set(ValidVRAMUsed)
+			dm.Set(ValidVRAMTotal)
+			if mem.Total > 0 {
+				dm.MemUtilRate = float64(mem.Used) * 100.0 / float64(mem.Total)
+				dm.Set(ValidMemUtilRate)
+			}
 		}
 		if t, ret := n.nv.DeviceGetTemperature(i, nvml.TEMPERATURE_GPU); ret == nvml.SUCCESS {
 			dm.TemperatureC = float64(t)
+			dm.Set(ValidTemperature)
 		}
 		if p, ret := n.nv.DeviceGetPowerUsage(i); ret == nvml.SUCCESS {
 			dm.PowerW = float64(p) / 1000.0
+			dm.Set(ValidPower)
 		}
 		if c, ret := n.nv.DeviceGetClockInfo(i, nvml.CLOCK_GRAPHICS); ret == nvml.SUCCESS {
 			dm.ClockMHz = c
+			dm.Set(ValidClock)
 		}
 		if c, ret := n.nv.DeviceGetMaxClockInfo(i, nvml.CLOCK_GRAPHICS); ret == nvml.SUCCESS {
 			dm.ClockMaxMHz = c
+			dm.Set(ValidClockMax)
 		}
 		if f, ret := n.nv.DeviceGetFanSpeed(i); ret == nvml.SUCCESS {
 			dm.FanSpeedPct = float64(f)
+			dm.Set(ValidFanSpeed)
 		}
+
+		// EffectiveLoad computed in SampleAll via registry (power cap heuristic).
 
 		sample.Devices = append(sample.Devices, dm)
 
 		if procs, ret := n.nv.DeviceGetComputeRunningProcesses(i); ret == nvml.SUCCESS {
 			for _, p := range procs {
-				sample.Procs = append(sample.Procs, ProcUsage{
+				pu := ProcUsage{
 					PID:      int32(p.Pid),
 					Name:     n.resolveName(int(p.Pid)),
 					DeviceID: d.ID,
 					VRAMUsed: p.UsedGpuMemory,
-				})
+				}
+				pu.Set(ValidVRAMUsed)
+				sample.Procs = append(sample.Procs, pu)
 			}
 		}
 		if procs, ret := n.nv.DeviceGetGraphicsRunningProcesses(i); ret == nvml.SUCCESS {
 			for _, p := range procs {
-				sample.Procs = append(sample.Procs, ProcUsage{
+				pu := ProcUsage{
 					PID:      int32(p.Pid),
 					Name:     n.resolveName(int(p.Pid)),
 					DeviceID: d.ID,
 					VRAMUsed: p.UsedGpuMemory,
-				})
+				}
+				pu.Set(ValidVRAMUsed)
+				sample.Procs = append(sample.Procs, pu)
 			}
 		}
 	}

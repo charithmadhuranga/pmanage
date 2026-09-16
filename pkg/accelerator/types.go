@@ -148,6 +148,10 @@ type DeviceMetrics struct {
 
 	// Validity bitmask — which fields are actually populated by the source.
 	Valid ValidMask `json:"-"`
+
+	// ValidFields is the JSON-serialized list of valid field names for the frontend.
+	// Populated by sources alongside the bitmask so the UI knows which metrics to render.
+	ValidFields []string `json:"validFields,omitempty"`
 }
 
 // IsValid returns true if the given field was populated by the source.
@@ -176,6 +180,9 @@ type ProcUsage struct {
 
 	// Validity bitmask for per-process fields.
 	Valid ValidMask `json:"-"`
+
+	// ValidFields is the JSON-serialized list of valid field names for the frontend.
+	ValidFields []string `json:"validFields,omitempty"`
 }
 
 func (p *ProcUsage) IsValid(f ValidField) bool {
@@ -190,6 +197,50 @@ type Sample struct {
 	Devices   []DeviceMetrics `json:"devices"`
 	Procs     []ProcUsage     `json:"procs"`
 	Timestamp int64           `json:"ts"`
+}
+
+// ============================================================================
+// ValidFields helpers — build the JSON-serialized field name list from bitmask
+// ============================================================================
+
+// validFieldNames maps ValidField constants to the string names sent to frontend.
+var validFieldNames = map[ValidField]string{
+	ValidUtilization:  "util",
+	ValidVRAMUsed:     "vramUsed",
+	ValidVRAMTotal:    "vramTotal",
+	ValidTemperature:  "temp",
+	ValidPower:        "power",
+	ValidClock:        "clock",
+	ValidClockMax:     "clockMax",
+	ValidFanSpeed:     "fan",
+	ValidMemUtilRate:  "memUtilRate",
+	ValidEncoderRate:  "encoder",
+	ValidDecoderRate:  "decoder",
+	ValidEffectiveLoad: "effectiveLoad",
+	ValidPowerMax:     "powerMax",
+	ValidCpuUsage:     "cpuUsage",
+	ValidMemResident:  "memResident",
+	ValidMemVirtual:   "memVirtual",
+}
+
+// BuildValidFields converts the bitmask into a string slice for JSON serialization.
+func (m *DeviceMetrics) BuildValidFields() {
+	m.ValidFields = m.ValidFields[:0]
+	for f, name := range validFieldNames {
+		if m.Valid.IsValid(f) {
+			m.ValidFields = append(m.ValidFields, name)
+		}
+	}
+}
+
+// BuildValidFields converts the bitmask into a string slice for JSON serialization.
+func (p *ProcUsage) BuildValidFields() {
+	p.ValidFields = p.ValidFields[:0]
+	for f, name := range validFieldNames {
+		if p.Valid.IsValid(f) {
+			p.ValidFields = append(p.ValidFields, name)
+		}
+	}
 }
 
 // ============================================================================

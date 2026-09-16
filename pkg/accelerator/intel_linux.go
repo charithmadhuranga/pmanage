@@ -88,16 +88,22 @@ func (s *IntelSource) Sample(ctx context.Context) (Sample, error) {
 
 		// i915: engine_busy_ns for device util (delta needed, first tick uses 0 baseline)
 		if total, err := sysfsUint64(d.devicePath, "device/engine_busy_ns"); err == nil && !s.prevTick.IsZero() {
-			// use overall: proportional based on elapsed; first tick stays 0
 			dm.UtilizationPct = 0 // computed from delta later if needed; use per-engine max instead
+			dm.Set(ValidUtilization)
 		}
 
 		// mem info (Xe kernels ≥6.1)
 		if vramTotal, err := sysfsUint64(d.devicePath, "device/mem_total"); err == nil {
 			dm.VRAMTotal = vramTotal
+			dm.Set(ValidVRAMTotal)
 		}
 		if vramUsed, err := sysfsUint64(d.devicePath, "device/mem_used"); err == nil {
 			dm.VRAMUsed = vramUsed
+			dm.Set(ValidVRAMUsed)
+		}
+		if dm.IsValid(ValidVRAMTotal) && dm.VRAMTotal > 0 {
+			dm.MemUtilRate = float64(dm.VRAMUsed) * 100.0 / float64(dm.VRAMTotal)
+			dm.Set(ValidMemUtilRate)
 		}
 		// RAPL power (if available)
 		hwmonGlob := d.devicePath + "/device/hwmon/hwmon*"
@@ -105,9 +111,11 @@ func (s *IntelSource) Sample(ctx context.Context) (Sample, error) {
 			hwmon := hwmonPaths[0]
 			if t, err := sysfsFloat64(hwmon, "temp1_input"); err == nil {
 				dm.TemperatureC = t / 1000.0
+				dm.Set(ValidTemperature)
 			}
 			if p, err := sysfsUint64(hwmon, "power1_average"); err == nil {
 				dm.PowerW = float64(p) / 1e6
+				dm.Set(ValidPower)
 			}
 		}
 
