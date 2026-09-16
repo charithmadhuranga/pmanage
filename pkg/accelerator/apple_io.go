@@ -45,7 +45,15 @@ typedef struct {
 
 static int cfNumberToSInt64(CFTypeRef v, long long *out) {
 	if (!v || CFGetTypeID(v) != CFNumberGetTypeID()) return -1;
-	return CFNumberGetValue((CFNumberRef)v, kCFNumberSInt64Type, out) ? 0 : -1;
+	// Try SInt64 first; fall back to SInt32 for values stored as int32
+	// (common for ANE core count, small counters, etc.).
+	if (CFNumberGetValue((CFNumberRef)v, kCFNumberSInt64Type, out)) return 0;
+	int32_t i32 = 0;
+	if (CFNumberGetValue((CFNumberRef)v, kCFNumberSInt32Type, &i32)) {
+		*out = (long long)i32;
+		return 0;
+	}
+	return -1;
 }
 
 static int cfDictionarySInt64(CFDictionaryRef dict, const char *key, long long *out) {
@@ -223,24 +231,26 @@ typedef struct {
 
 // Locates the ANE power manager in the IOReport PLUGIN registry: H1xANELoadBalancer
 // or H11ANEIn with DeviceProperties ANEDeviceProperty*.
+// Tries both entries independently — some M1 variants only expose one.
 static int ane_read(ane_stat *out) {
 	memset(out, 0, sizeof(*out));
-	io_iterator_t iter;
-	if (IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("H1xANELoadBalancer"), &iter) != KERN_SUCCESS)
-		iter = 0;
-	io_service_t svc;
 	int found = 0;
-	while (!found && (svc = IOIteratorNext(iter)) != IO_OBJECT_NULL) {
-		CFTypeRef dp = IORegistryEntryCreateCFProperty(svc, CFSTR("DeviceProperties"), kCFAllocatorDefault, 0);
-		if (dp) CFRelease(dp);
-		IOObjectRelease(svc);
-		found = 1; // any H1xANELoadBalancer entry means ANE exists
-	}
-	if (iter) IOObjectRelease(iter);
-	if (!found) return -1;
 
-	// Try the H11ANEIn device for architecture/cores details.
+	// Try H1xANELoadBalancer first (ANE presence indicator).
+	io_iterator_t iter = 0;
+	if (IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("H1xANELoadBalancer"), &iter) == KERN_SUCCESS) {
+		io_service_t svc;
+		while ((svc = IOIteratorNext(iter)) != IO_OBJECT_NULL) {
+			IOObjectRelease(svc);
+			found = 1;
+			break;
+		}
+		IOObjectRelease(iter);
+	}
+
+	// Try H11ANEIn for device properties (architecture, cores, version).
 	if (IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("H11ANEIn"), &iter) == KERN_SUCCESS) {
+		io_service_t svc;
 		while ((svc = IOIteratorNext(iter)) != IO_OBJECT_NULL) {
 			CFTypeRef props = IORegistryEntryCreateCFProperty(svc, CFSTR("DeviceProperties"), kCFAllocatorDefault, 0);
 			if (props && CFGetTypeID(props) == CFDictionaryGetTypeID()) {
@@ -267,6 +277,18 @@ static int ane_read(ane_stat *out) {
 		}
 		IOObjectRelease(iter);
 	}
+
+	// Fallback: check "AppleANEDevice" which some M1 variants expose.
+	if (!found && IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("AppleANEDevice"), &iter) == KERN_SUCCESS) {
+		io_service_t svc;
+		while ((svc = IOIteratorNext(iter)) != IO_OBJECT_NULL) {
+			IOObjectRelease(svc);
+			found = 1;
+			break;
+		}
+		IOObjectRelease(iter);
+	}
+
 	out->found = found;
 	return found ? 0 : -1;
 }

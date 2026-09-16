@@ -59,8 +59,8 @@ func (s *powermetricsSource) Capabilities() []Capability {
 }
 func (s *powermetricsSource) Devices() []DeviceInfo {
 	return []DeviceInfo{
-		{ID: "gpu0", Vendor: "Apple", Name: "Apple GPU (powermetrics)", Driver: "powermetrics", Kind: GPU},
-		{ID: "npu0", Vendor: "Apple", Name: "Apple ANE (powermetrics)", Driver: "powermetrics", Kind: NPU},
+		{ID: "gpu0-pm", Vendor: "Apple", Name: "Apple GPU (powermetrics)", Driver: "powermetrics", Kind: GPU},
+		{ID: "npu0-pm", Vendor: "Apple", Name: "Apple ANE (powermetrics)", Driver: "powermetrics", Kind: NPU},
 	}
 }
 
@@ -89,14 +89,14 @@ func (s *powermetricsSource) Sample(_ context.Context) (Sample, error) {
 	return Sample{
 		Devices: []DeviceMetrics{
 			{
-				DeviceID:       "gpu0",
+				DeviceID:       "gpu0-pm",
 				UtilizationPct: 0, // GPU util not reliable via powermetrics; IOGPU already provides it.
 				PowerW:         rec.GPUPowerMW / 1000.0,
 				ClockMHz:       uint32(rec.GPUFreqMHz),
 				Status:         "ok",
 			},
 			{
-				DeviceID:       "npu0",
+				DeviceID:       "npu0-pm",
 				UtilizationPct: -1, // not measurable without root; see ane_read for H/W identity.
 				PowerW:         rec.ANEPowerMW / 1000.0,
 				Status:         "ok",
@@ -108,8 +108,8 @@ func (s *powermetricsSource) Sample(_ context.Context) (Sample, error) {
 func emptyPMSample() Sample {
 	return Sample{
 		Devices: []DeviceMetrics{
-			{DeviceID: "gpu0", Status: "n/a"},
-			{DeviceID: "npu0", Status: "n/a"},
+			{DeviceID: "gpu0-pm", Status: "n/a"},
+			{DeviceID: "npu0-pm", Status: "n/a"},
 		},
 	}
 }

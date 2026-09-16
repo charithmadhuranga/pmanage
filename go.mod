@@ -4,13 +4,13 @@ go 1.25.0
 
 require (
 	github.com/NVIDIA/go-nvml v0.13.4-0
+	github.com/adrg/xdg v0.5.3
 	github.com/shirou/gopsutil/v4 v4.26.8
 	github.com/wailsapp/wails/v3 v3.0.0-beta.22
 	golang.org/x/sys v0.46.0
 )
 
 require (
-	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/ebitengine/purego v0.10.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect

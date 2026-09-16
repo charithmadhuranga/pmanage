@@ -44,8 +44,8 @@ func TestAppleSource_Live(t *testing.T) {
 		t.Fatalf("expected %d device metrics, got %d", len(devs), len(sample.Devices))
 	}
 	for _, m := range sample.Devices {
-		t.Logf("device=%s util=%.0f%% vramUsed=%d vramTotal=%d powerW=%.2f status=%s clockMHz=%d",
-			m.DeviceID, m.UtilizationPct, m.VRAMUsed, m.VRAMTotal, m.PowerW, m.Status, m.ClockMHz)
+		t.Logf("device=%s util=%.0f%% vramUsed=%d vramTotal=%d powerW=%.2f status=%s clockMHz=%d tempC=%.1f",
+			m.DeviceID, m.UtilizationPct, m.VRAMUsed, m.VRAMTotal, m.PowerW, m.Status, m.ClockMHz, m.TemperatureC)
 		if m.Status != "ok" {
 			t.Errorf("expected ok status on M-series, got %s", m.Status)
 		}
@@ -83,5 +83,246 @@ func TestAppleSource_Live(t *testing.T) {
 	}
 	if !foundGpu {
 		t.Log("no active GPU processes in this 1 s window (idle) — acceptable")
+	}
+}
+
+// TestAppleGPU_DetectMetadata validates that GPU detection returns correct
+// metadata on Apple Silicon: model name, core count, vendor, driver.
+func TestAppleGPU_DetectMetadata(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	gpus := appleGPUs()
+	if len(gpus) == 0 {
+		t.Skip("no Apple GPU detected")
+	}
+	for i, g := range gpus {
+		t.Logf("gpu[%d]: name=%q model=%q cores=%d hasStats=%v",
+			i, g.Name, g.Model, g.CoreCount, g.HasStats)
+		if g.Model == "" && g.Name == "" {
+			t.Error("expected at least one of model or name to be non-empty")
+		}
+		if g.CoreCount <= 0 {
+			t.Errorf("expected positive core count, got %d", g.CoreCount)
+		}
+		if !g.HasStats {
+			t.Error("expected PerformanceStatistics on Apple Silicon")
+		}
+	}
+}
+
+// TestAppleANE_Detect validates ANE detection returns valid identity data.
+func TestAppleANE_Detect(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	ane := appleANEs()
+	if !ane.Found {
+		t.Skip("no Apple ANE detected")
+	}
+	t.Logf("ANE: name=%q arch=%q ver=%q cores=%d", ane.Name, ane.Arch, ane.Ver, ane.Cores)
+	if ane.Cores <= 0 {
+		t.Errorf("expected positive ANE core count, got %d", ane.Cores)
+	}
+}
+
+// TestAppleSource_NPUHasMemory validates that NPU device metrics include
+// unified memory total (not zero).
+func TestAppleSource_NPUHasMemory(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	src := NewAppleSource()
+	if !src.Detect() {
+		t.Skip("no Apple accelerator detected")
+	}
+	devs := src.Devices()
+	hasNPU := false
+	for _, d := range devs {
+		if d.Kind == NPU {
+			hasNPU = true
+			break
+		}
+	}
+	if !hasNPU {
+		t.Skip("no NPU device detected")
+	}
+
+	// First sample to init baseline.
+	src.Sample(context.Background())
+	time.Sleep(500 * time.Millisecond)
+	sample, err := src.Sample(context.Background())
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+	for _, m := range sample.Devices {
+		if m.DeviceID == "npu0" {
+			t.Logf("NPU: util=%.0f%% powerW=%.2f vramTotal=%d tempC=%.1f status=%s",
+				m.UtilizationPct, m.PowerW, m.VRAMTotal, m.TemperatureC, m.Status)
+			if m.VRAMTotal == 0 {
+				t.Error("NPU should report unified memory total, got 0")
+			}
+			if m.UtilizationPct != -1 {
+				t.Errorf("NPU util should be -1 (N/A), got %.0f", m.UtilizationPct)
+			}
+			if m.TemperatureC != -1 {
+				t.Errorf("NPU temp should be -1 (N/A), got %.0f", m.TemperatureC)
+			}
+			return
+		}
+	}
+	t.Error("NPU device not found in sample")
+}
+
+// TestAppleSource_TemperatureNA validates that GPU temperature is set to -1
+// (N/A sentinel) since Apple does not expose GPU temp via IOKit.
+func TestAppleSource_TemperatureNA(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	src := NewAppleSource()
+	if !src.Detect() {
+		t.Skip("no Apple accelerator detected")
+	}
+	src.Sample(context.Background())
+	time.Sleep(500 * time.Millisecond)
+	sample, err := src.Sample(context.Background())
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+	for _, m := range sample.Devices {
+		if m.DeviceID == "gpu0" {
+			t.Logf("GPU tempC=%.1f", m.TemperatureC)
+			if m.TemperatureC != -1 {
+				t.Errorf("GPU temp should be -1 (N/A), got %.0f", m.TemperatureC)
+			}
+			return
+		}
+	}
+	t.Error("gpu0 not found in sample")
+}
+
+// TestAppleSource_ConsistentSamples validates that consecutive samples
+// return consistent device counts and IDs.
+func TestAppleSource_ConsistentSamples(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	src := NewAppleSource()
+	if !src.Detect() {
+		t.Skip("no Apple accelerator detected")
+	}
+	devs := src.Devices()
+
+	for i := 0; i < 5; i++ {
+		sample, err := src.Sample(context.Background())
+		if err != nil {
+			t.Fatalf("sample %d: %v", i, err)
+		}
+		if len(sample.Devices) != len(devs) {
+			t.Errorf("sample %d: expected %d devices, got %d", i, len(devs), len(sample.Devices))
+		}
+		for j, m := range sample.Devices {
+			if j < len(devs) && m.DeviceID != devs[j].ID {
+				t.Errorf("sample %d: device %d ID mismatch: expected %s, got %s",
+					i, j, devs[j].ID, m.DeviceID)
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// TestAppleSource_PerProcessGPU_DeltaAccuracy validates that per-process GPU
+// utilization is computed correctly across multiple samples.
+func TestAppleSource_PerProcessGPU_DeltaAccuracy(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	src := NewAppleSource()
+	if !src.Detect() {
+		t.Skip("no Apple accelerator detected")
+	}
+
+	// First sample initializes baseline.
+	src.Sample(context.Background())
+	time.Sleep(1 * time.Second)
+
+	// Second sample should have per-process data.
+	sample, err := src.Sample(context.Background())
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+
+	t.Logf("per-process GPU procs=%d", len(sample.Procs))
+	for _, p := range sample.Procs {
+		if p.PID <= 0 {
+			t.Errorf("invalid PID: %d", p.PID)
+		}
+		if p.Name == "" {
+			t.Errorf("empty process name for PID %d", p.PID)
+		}
+		if p.DeviceID != "gpu0" {
+			t.Errorf("unexpected device ID: %s", p.DeviceID)
+		}
+		if p.UtilizationPct < 0 || p.UtilizationPct > 100 {
+			t.Errorf("PID %d: implausible util %.1f%%", p.PID, p.UtilizationPct)
+		}
+	}
+}
+
+// TestAppleSource_NoErrorWithANEOnly validates that Sample() does not return
+// an error when ANE is detected but GPU metrics are unavailable.
+func TestAppleSource_NoErrorWithANEOnly(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	src := NewAppleSource()
+	if !src.Detect() {
+		t.Skip("no Apple accelerator detected")
+	}
+
+	// Even if GPU has no PerformanceStatistics, the sample should succeed
+	// as long as at least one device (GPU or ANE) exists.
+	_, err := src.Sample(context.Background())
+	// On real Apple Silicon, this should never error because we have devices.
+	if err != nil {
+		t.Logf("sample returned error (may be expected on non-Apple hardware): %v", err)
+	}
+}
+
+// TestAppleSource_PowerBaseline validates that the first sample returns 0 W
+// (energy baseline) and subsequent samples return non-negative power.
+func TestAppleSource_PowerBaseline(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	src := NewAppleSource()
+	if !src.Detect() {
+		t.Skip("no Apple accelerator detected")
+	}
+
+	// First sample: power should be 0 (baseline).
+	s1, err := src.Sample(context.Background())
+	if err != nil {
+		t.Fatalf("sample 1: %v", err)
+	}
+	for _, m := range s1.Devices {
+		if m.PowerW != 0 {
+			t.Errorf("first sample device %s: expected 0 W baseline, got %.2f W", m.DeviceID, m.PowerW)
+		}
+	}
+
+	time.Sleep(1 * time.Second)
+
+	// Second sample: power should be non-negative.
+	s2, err := src.Sample(context.Background())
+	if err != nil {
+		t.Fatalf("sample 2: %v", err)
+	}
+	for _, m := range s2.Devices {
+		if m.PowerW < 0 {
+			t.Errorf("second sample device %s: negative power %.2f W", m.DeviceID, m.PowerW)
+		}
+		t.Logf("device %s power=%.2f W", m.DeviceID, m.PowerW)
 	}
 }

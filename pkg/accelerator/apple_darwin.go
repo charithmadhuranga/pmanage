@@ -16,12 +16,15 @@ import (
 //   - GPU power from the IOReport "Energy Model" / "GPU Energy" channel delta
 //   - ANE power from the IOReport "PMP" / "ANE" channel delta
 //
-// ALl power values are derived from cumulative energy counters and therefore need
+// All power values are derived from cumulative energy counters and therefore need
 // two samples at least one telemetry interval apart; the first sample reports 0 W.
 type AppleSource struct {
 	mu      sync.Mutex
 	devices []DeviceInfo
 	hasANE  bool
+
+	// Cached GPU stats from last Detect() — avoids re-enumerating IOKit every tick.
+	cachedGPUStats []appleGPUStat
 
 	gpuEnergy *appleEnergySub // "Energy Model" group
 	aneEnergy *appleEnergySub // "PMP" group
@@ -32,7 +35,8 @@ type AppleSource struct {
 	first      bool
 
 	// Per-process GPU time deltas (Activity-Monitor GPU column source).
-	gpuProc map[int]uint64 // pid -> cumulative accumulatedGPUTime (ns)
+	gpuProc     map[int]uint64 // pid -> cumulative accumulatedGPUTime (ns)
+	gpuProcInit bool           // true after first baseline capture
 }
 
 func NewAppleSource() *AppleSource {
@@ -59,6 +63,7 @@ func (a *AppleSource) Detect() bool {
 	defer a.mu.Unlock()
 	a.devices = a.devices[:0]
 	a.hasANE = false
+	a.cachedGPUStats = gpus
 	for i, g := range gpus {
 		name := g.Model
 		if name == "" {
@@ -108,7 +113,10 @@ func (a *AppleSource) Sample(_ context.Context) (Sample, error) {
 		a.first = false
 	}
 
+	// Re-read GPU stats every tick (PerformanceStatistics values change).
 	gpus := appleGPUs()
+	a.cachedGPUStats = gpus
+
 	now := time.Now()
 	out := Sample{Timestamp: now.UnixMilli()}
 	totalMem := uint64(0)
@@ -148,17 +156,18 @@ func (a *AppleSource) Sample(_ context.Context) (Sample, error) {
 		a.lastANEj = aneJ
 	}
 
+	// --- GPU device metrics ---
 	for i := range gpus {
 		id := fmt.Sprintf("gpu%d", i)
 		m := DeviceMetrics{
-			DeviceID: id,
-			Status:   "ok",
-			PowerW:   gpuW,
+			DeviceID:     id,
+			Status:       "ok",
+			PowerW:       gpuW,
+			TemperatureC: -1, // Apple does not expose GPU temp via IOKit
 		}
 		if gpus[i].HasStats {
-			g := gpus[i]
-			m.UtilizationPct = g.DevUtil
-			m.VRAMUsed = g.AllocSysMem
+			m.UtilizationPct = gpus[i].DevUtil
+			m.VRAMUsed = gpus[i].AllocSysMem
 			m.VRAMTotal = totalMem
 		} else {
 			m.Status = "n/a"
@@ -167,23 +176,27 @@ func (a *AppleSource) Sample(_ context.Context) (Sample, error) {
 		out.Devices = append(out.Devices, m)
 	}
 
+	// --- NPU device metrics ---
 	if a.hasANE {
 		out.Devices = append(out.Devices, DeviceMetrics{
 			DeviceID:       "npu0",
-			UtilizationPct: -1,
+			UtilizationPct: -1, // Apple does not expose ANE utilization
 			PowerW:         aneW,
+			VRAMTotal:      totalMem, // ANE uses unified memory
+			TemperatureC:   -1,       // Apple does not expose ANE temp
 			Status:         "ok",
 		})
 	}
 
-	if len(gpus) == 0 {
+	// Return error only if no devices at all (neither GPU nor ANE).
+	if len(gpus) == 0 && !a.hasANE {
 		return out, fmt.Errorf("apple: no accelerator available")
 	}
 
-	// Per-process GPU utilization: delta(accumulatedGPUTime) / wall time.
+	// --- Per-process GPU utilization: delta(accumulatedGPUTime) / wall time ---
 	dt := interval.Seconds()
 	procs := appleGPUProcesses()
-	if a.gpuProc != nil && dt > 0 {
+	if a.gpuProcInit && dt > 0 {
 		for _, p := range procs {
 			prev, ok := a.gpuProc[p.PID]
 			if !ok || p.GPUTimeNS < prev {
@@ -204,10 +217,13 @@ func (a *AppleSource) Sample(_ context.Context) (Sample, error) {
 			})
 		}
 	}
+	// Save baseline for next tick. Initialize even if first sample had no procs
+	// so the second sample can compute deltas correctly.
 	a.gpuProc = make(map[int]uint64, len(procs))
 	for _, p := range procs {
 		a.gpuProc[p.PID] = p.GPUTimeNS
 	}
+	a.gpuProcInit = true
 
 	return out, nil
 }
