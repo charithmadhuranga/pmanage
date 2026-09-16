@@ -293,6 +293,119 @@ static int ane_read(ane_stat *out) {
 	return found ? 0 : -1;
 }
 
+// ---- system memory (host_info) ----
+// nvtop uses host_info(HOST_BASIC_INFO) for total unified memory on Apple Silicon.
+// This is more accurate than gopsutil for GPU unified memory purposes.
+
+#include <mach/mach_host.h>
+#include <mach/mach_time.h>
+#include <sys/sysctl.h>
+#include <libproc.h>
+#include <pwd.h>
+
+typedef struct {
+	unsigned long long totalBytes;
+	int ok;
+} apple_mem_info;
+
+static apple_mem_info apple_system_memory(void) {
+	apple_mem_info mem;
+	memset(&mem, 0, sizeof(mem));
+	mach_msg_type_number_t host_size = HOST_BASIC_INFO_COUNT;
+	host_basic_info_data_t info;
+	kern_return_t kr = host_info(mach_host_self(), HOST_BASIC_INFO, (host_info_t)&info, &host_size);
+	if (kr == KERN_SUCCESS) {
+		mem.totalBytes = info.max_mem;
+		mem.ok = 1;
+	}
+	return mem;
+}
+
+// ---- per-process CPU/memory via proc_pidinfo ----
+// nvtop uses proc_pidinfo(PROC_PIDTASKINFO) for CPU time and memory per process.
+
+typedef struct {
+	double totalUserTime;    // seconds
+	double totalKernelTime;  // seconds
+	unsigned long virtualMemory;
+	unsigned long residentMemory;
+	unsigned int cpuUsage;   // percentage
+	int ok;
+} apple_proc_info;
+
+static apple_proc_info apple_process_info(int pid) {
+	apple_proc_info info;
+	memset(&info, 0, sizeof(info));
+	struct proc_taskinfo task;
+	int st = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &task, PROC_PIDTASKINFO_SIZE);
+	if (st != PROC_PIDTASKINFO_SIZE) return info;
+
+	// Convert Mach absolute time to seconds
+	mach_timebase_info_data_t timebase;
+	mach_timebase_info(&timebase);
+	double ns_per_tick = (double)timebase.numer / (double)timebase.denom;
+
+	info.totalUserTime = (task.pti_total_user * ns_per_tick) / 1e9;
+	info.totalKernelTime = (task.pti_total_system * ns_per_tick) / 1e9;
+	info.virtualMemory = task.pti_virtual_size;
+	info.residentMemory = task.pti_resident_size;
+	info.ok = 1;
+	return info;
+}
+
+// ---- process username via proc_pidinfo ----
+// nvtop uses proc_pidinfo(PROC_PIDT_SHORTBSDINFO) + getpwuid() for username.
+
+static int apple_process_username(int pid, char *buf, int bufsize) {
+	struct proc_bsdshortinfo bsd;
+	int st = proc_pidinfo(pid, PROC_PIDT_SHORTBSDINFO, 0, &bsd, PROC_PIDT_SHORTBSDINFO_SIZE);
+	if (st != PROC_PIDT_SHORTBSDINFO_SIZE) return -1;
+	struct passwd *pw = getpwuid(bsd.pbsi_uid);
+	if (!pw) return -1;
+	strncpy(buf, pw->pw_name, bufsize - 1);
+	buf[bufsize - 1] = '\0';
+	return 0;
+}
+
+// ---- process command line via sysctl(KERN_PROCARGS2) ----
+// nvtop uses sysctl(KERN_PROCARGS2) for full argument vector.
+
+static int apple_process_command(int pid, char *buf, int bufsize) {
+	int mib[3] = {CTL_KERN, KERN_PROCARGS2, pid};
+	size_t argmax = 0;
+	// First call to get size
+	if (sysctl(mib, 3, NULL, &argmax, NULL, 0) != 0) return -1;
+	if (argmax == 0) return -1;
+	char *procargs = (char *)malloc(argmax);
+	if (!procargs) return -1;
+	if (sysctl(mib, 3, procargs, &argmax, NULL, 0) != 0) {
+		free(procargs);
+		return -1;
+	}
+	// First int is argc
+	unsigned argc;
+	memcpy(&argc, procargs, sizeof(argc));
+	// Skip executable path
+	size_t i = sizeof(argc);
+	while (i < argmax && procargs[i] != 0) i++;
+	// Skip null separators
+	while (i < argmax && procargs[i] == 0) i++;
+	// Copy args, replacing nulls with spaces
+	int out = 0;
+	for (unsigned arg = 0; arg < argc && i < argmax && out < bufsize - 1; arg++) {
+		while (i < argmax && procargs[i] != 0 && out < bufsize - 1) {
+			buf[out++] = procargs[i++];
+		}
+		if (out < bufsize - 1) buf[out++] = ' ';
+		i++; // skip null
+	}
+	// Trim trailing space
+	if (out > 0 && buf[out-1] == ' ') out--;
+	buf[out] = '\0';
+	free(procargs);
+	return out > 0 ? 0 : -1;
+}
+
 // ---- per-process GPU via AGXDeviceUserClient AppUsage ----
 // Activity Monitor's "GPU" column reads the same user-level data.
 
@@ -515,4 +628,42 @@ func appleGPUProcesses() []appleGPUProcess {
 		})
 	}
 	return out
+}
+
+// appleSystemMemory returns total unified memory in bytes via host_info(HOST_BASIC_INFO).
+// More accurate than gopsutil for Apple Silicon GPU unified memory.
+func appleSystemMemory() uint64 {
+	mem := C.apple_system_memory()
+	if mem.ok == 0 {
+		return 0
+	}
+	return uint64(mem.totalBytes)
+}
+
+// appleProcessInfo returns per-process CPU time and memory via proc_pidinfo.
+func appleProcessInfo(pid int) (userTime float64, kernelTime float64, virtMem uint64, residentMem uint64, ok bool) {
+	info := C.apple_process_info(C.int(pid))
+	if info.ok == 0 {
+		return 0, 0, 0, 0, false
+	}
+	return float64(info.totalUserTime), float64(info.totalKernelTime),
+		uint64(info.virtualMemory), uint64(info.residentMemory), true
+}
+
+// appleProcessUsername returns the username for a given PID.
+func appleProcessUsername(pid int) string {
+	var buf [256]C.char
+	if C.apple_process_username(C.int(pid), &buf[0], C.int(len(buf))) != 0 {
+		return ""
+	}
+	return C.GoString(&buf[0])
+}
+
+// appleProcessCommand returns the full command line for a given PID.
+func appleProcessCommand(pid int) string {
+	var buf [1024]C.char
+	if C.apple_process_command(C.int(pid), &buf[0], C.int(len(buf))) != 0 {
+		return ""
+	}
+	return C.GoString(&buf[0])
 }

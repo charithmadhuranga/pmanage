@@ -11,13 +11,14 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 )
 
-// AppleSource reads Apple Silicon GPU / ANE metrics:
-//   - aggregate GPU utilization + system memory from IOKit PerformanceStatistics
-//   - GPU power from the IOReport "Energy Model" / "GPU Energy" channel delta
-//   - ANE power from the IOReport "PMP" / "ANE" channel delta
-//
-// All power values are derived from cumulative energy counters and therefore need
-// two samples at least one telemetry interval apart; the first sample reports 0 W.
+// AppleSource reads Apple Silicon GPU / ANE metrics using techniques from nvtop:
+//   - IOKit PerformanceStatistics for aggregate GPU util + system memory
+//   - IOReport energy deltas for GPU/ANE power
+//   - AGXDeviceUserClient for per-process GPU time
+//   - host_info(HOST_BASIC_INFO) for total unified memory (nvtop technique)
+//   - proc_pidinfo for per-process CPU/memory stats (nvtop technique)
+//   - Two-bucket process cache for lifecycle tracking (nvtop technique)
+//   - Validity bitmask for honest N/A reporting (nvtop technique)
 type AppleSource struct {
 	mu      sync.Mutex
 	devices []DeviceInfo
@@ -34,13 +35,22 @@ type AppleSource struct {
 	lastSample time.Time
 	first      bool
 
+	// Total unified memory (cached from host_info).
+	totalMem uint64
+
 	// Per-process GPU time deltas (Activity-Monitor GPU column source).
 	gpuProc     map[int]uint64 // pid -> cumulative accumulatedGPUTime (ns)
 	gpuProcInit bool           // true after first baseline capture
+
+	// Process cache for name/username/CPU stats (nvtop two-bucket pattern).
+	procCache *ProcessCache
 }
 
 func NewAppleSource() *AppleSource {
-	return &AppleSource{first: true}
+	return &AppleSource{
+		first:     true,
+		procCache: NewProcessCache(),
+	}
 }
 
 func (a *AppleSource) Name() string { return "apple" }
@@ -64,6 +74,16 @@ func (a *AppleSource) Detect() bool {
 	a.devices = a.devices[:0]
 	a.hasANE = false
 	a.cachedGPUStats = gpus
+
+	// Cache total unified memory from host_info (nvtop technique).
+	a.totalMem = appleSystemMemory()
+	if a.totalMem == 0 {
+		// Fallback to gopsutil if host_info fails.
+		if vm, err := mem.VirtualMemory(); err == nil {
+			a.totalMem = vm.Total
+		}
+	}
+
 	for i, g := range gpus {
 		name := g.Model
 		if name == "" {
@@ -119,10 +139,9 @@ func (a *AppleSource) Sample(_ context.Context) (Sample, error) {
 
 	now := time.Now()
 	out := Sample{Timestamp: now.UnixMilli()}
-	totalMem := uint64(0)
-	if vm, err := mem.VirtualMemory(); err == nil {
-		totalMem = vm.Total
-	}
+
+	// Use cached total memory (nvtop technique: host_info).
+	totalMem := a.totalMem
 
 	// Cumulative energy read once per tick; deltas below are J consumed this tick.
 	gpuJ, gpuOK := 0.0, false
@@ -156,7 +175,7 @@ func (a *AppleSource) Sample(_ context.Context) (Sample, error) {
 		a.lastANEj = aneJ
 	}
 
-	// --- GPU device metrics ---
+	// --- GPU device metrics (with validity bitmask) ---
 	for i := range gpus {
 		id := fmt.Sprintf("gpu%d", i)
 		m := DeviceMetrics{
@@ -165,27 +184,52 @@ func (a *AppleSource) Sample(_ context.Context) (Sample, error) {
 			PowerW:       gpuW,
 			TemperatureC: -1, // Apple does not expose GPU temp via IOKit
 		}
+		m.Set(ValidPower)
+
 		if gpus[i].HasStats {
 			m.UtilizationPct = gpus[i].DevUtil
+			m.Set(ValidUtilization)
+
 			m.VRAMUsed = gpus[i].AllocSysMem
+			m.Set(ValidVRAMUsed)
+
 			m.VRAMTotal = totalMem
+			m.Set(ValidVRAMTotal)
+
+			// Memory utilization rate (nvtop technique).
+			if totalMem > 0 {
+				m.MemUtilRate = float64(gpus[i].AllocSysMem) * 100.0 / float64(totalMem)
+				m.Set(ValidMemUtilRate)
+			}
 		} else {
 			m.Status = "n/a"
 			m.UtilizationPct = -1
 		}
+
+		// Temperature: Apple does not expose GPU temp via IOKit.
+		// Leave unset (invalid) — frontend shows "N/A".
+
+		// Effective load (nvtop technique): gpu_util * (power / power_max).
+		// power_max not available from IOGPU, so skip for now.
+
 		out.Devices = append(out.Devices, m)
 	}
 
-	// --- NPU device metrics ---
+	// --- NPU device metrics (with validity bitmask) ---
 	if a.hasANE {
-		out.Devices = append(out.Devices, DeviceMetrics{
+		m := DeviceMetrics{
 			DeviceID:       "npu0",
 			UtilizationPct: -1, // Apple does not expose ANE utilization
 			PowerW:         aneW,
 			VRAMTotal:      totalMem, // ANE uses unified memory
 			TemperatureC:   -1,       // Apple does not expose ANE temp
 			Status:         "ok",
-		})
+		}
+		m.Set(ValidPower)
+		if totalMem > 0 {
+			m.Set(ValidVRAMTotal)
+		}
+		out.Devices = append(out.Devices, m)
 	}
 
 	// Return error only if no devices at all (neither GPU nor ANE).
@@ -193,7 +237,7 @@ func (a *AppleSource) Sample(_ context.Context) (Sample, error) {
 		return out, fmt.Errorf("apple: no accelerator available")
 	}
 
-	// --- Per-process GPU utilization: delta(accumulatedGPUTime) / wall time ---
+	// --- Per-process GPU utilization (nvtop two-bucket cache technique) ---
 	dt := interval.Seconds()
 	procs := appleGPUProcesses()
 	if a.gpuProcInit && dt > 0 {
@@ -209,21 +253,80 @@ func (a *AppleSource) Sample(_ context.Context) (Sample, error) {
 			if util > 100 {
 				util = 100
 			}
-			out.Procs = append(out.Procs, ProcUsage{
+
+			proc := ProcUsage{
 				PID:            int32(p.PID),
 				Name:           p.Name,
 				DeviceID:       "gpu0",
 				UtilizationPct: util,
-			})
+			}
+			proc.Set(ValidUtilization)
+
+			// Resolve process metadata from cache (nvtop technique).
+			cacheEntry := a.procCache.Get(int32(p.PID))
+			if cacheEntry == nil {
+				// New process — resolve name, username, CPU stats.
+				fullName := appleProcessCommand(p.PID)
+				if fullName == "" {
+					fullName = p.Name
+				}
+				username := appleProcessUsername(p.PID)
+
+				cacheEntry = &ProcessCacheEntry{
+					PID:      int32(p.PID),
+					Name:     fullName,
+					Username: username,
+				}
+				a.procCache.Put(int32(p.PID), cacheEntry)
+			}
+
+			if cacheEntry.Name != "" {
+				proc.Name = cacheEntry.Name
+			}
+			if cacheEntry.Username != "" {
+				proc.Username = cacheEntry.Username
+			}
+
+			// Per-process CPU/memory stats (nvtop technique: proc_pidinfo).
+			if userTime, kernelTime, virtMem, residentMem, ok := appleProcessInfo(p.PID); ok {
+				totalCPU := userTime + kernelTime
+				if cacheEntry.LastMeasurementTime.IsZero() {
+					proc.CpuUsage = 0
+				} else {
+					elapsed := now.Sub(cacheEntry.LastMeasurementTime).Seconds()
+					if elapsed > 0 {
+						proc.CpuUsage = (totalCPU - cacheEntry.LastTotalCPUTime) / elapsed * 100.0
+						if proc.CpuUsage > 100 {
+							proc.CpuUsage = 100
+						}
+						if proc.CpuUsage < 0 {
+							proc.CpuUsage = 0
+						}
+					}
+				}
+				proc.MemResident = residentMem
+				proc.MemVirtual = virtMem
+				proc.Set(ValidCpuUsage)
+				proc.Set(ValidMemResident)
+				proc.Set(ValidMemVirtual)
+
+				cacheEntry.LastTotalCPUTime = totalCPU
+				cacheEntry.LastMeasurementTime = now
+			}
+
+			out.Procs = append(out.Procs, proc)
 		}
 	}
-	// Save baseline for next tick. Initialize even if first sample had no procs
-	// so the second sample can compute deltas correctly.
+
+	// Save GPU time baseline for next tick.
 	a.gpuProc = make(map[int]uint64, len(procs))
 	for _, p := range procs {
 		a.gpuProc[p.PID] = p.GPUTimeNS
 	}
 	a.gpuProcInit = true
+
+	// Advance process cache lifecycle (nvtop technique).
+	a.procCache.Swap()
 
 	return out, nil
 }

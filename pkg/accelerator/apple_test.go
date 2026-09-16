@@ -70,7 +70,8 @@ func TestAppleSource_Live(t *testing.T) {
 	t.Logf("gpu procs=%d", len(sample.Procs))
 	foundGpu := false
 	for _, p := range sample.Procs {
-		t.Logf("proc pid=%d name=%s dev=%s util=%.1f%%", p.PID, p.Name, p.DeviceID, p.UtilizationPct)
+		t.Logf("proc pid=%d name=%s dev=%s util=%.1f%% cpu=%.1f%% memRes=%d",
+			p.PID, p.Name, p.DeviceID, p.UtilizationPct, p.CpuUsage, p.MemResident)
 		if p.UtilizationPct < 0 || p.UtilizationPct > 100 {
 			t.Errorf("implausible per-process util: %f", p.UtilizationPct)
 		}
@@ -324,5 +325,103 @@ func TestAppleSource_PowerBaseline(t *testing.T) {
 			t.Errorf("second sample device %s: negative power %.2f W", m.DeviceID, m.PowerW)
 		}
 		t.Logf("device %s power=%.2f W", m.DeviceID, m.PowerW)
+	}
+}
+
+// TestAppleSource_SystemMemory validates that host_info returns valid memory.
+func TestAppleSource_SystemMemory(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	mem := appleSystemMemory()
+	t.Logf("system memory: %d bytes (%.1f GB)", mem, float64(mem)/1e9)
+	if mem == 0 {
+		t.Error("host_info returned 0 bytes for system memory")
+	}
+	if mem < 1e9 {
+		t.Errorf("implausible system memory: %d bytes", mem)
+	}
+}
+
+// TestAppleSource_PerProcessInfo validates that proc_pidinfo returns valid data.
+func TestAppleSource_PerProcessInfo(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	// Test with PID 1 (launchd)
+	userTime, kernelTime, virtMem, residentMem, ok := appleProcessInfo(1)
+	if !ok {
+		t.Skip("proc_pidinfo failed for PID 1 (may need elevated privileges)")
+	}
+	t.Logf("PID 1: userTime=%.2f kernelTime=%.2f virtMem=%d residentMem=%d",
+		userTime, kernelTime, virtMem, residentMem)
+	if virtMem == 0 {
+		t.Error("expected non-zero virtual memory for PID 1")
+	}
+}
+
+// TestAppleSource_ProcessUsername validates that process username resolution works.
+func TestAppleSource_ProcessUsername(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	username := appleProcessUsername(1)
+	t.Logf("PID 1 username: %q", username)
+	if username == "" {
+		t.Skip("could not resolve username for PID 1")
+	}
+}
+
+// TestAppleSource_ProcessCommand validates that process command line resolution works.
+func TestAppleSource_ProcessCommand(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	cmd := appleProcessCommand(1)
+	t.Logf("PID 1 command: %q", cmd)
+	if cmd == "" {
+		t.Skip("could not resolve command for PID 1")
+	}
+}
+
+// TestAppleSource_ValidBitmask validates that the validity bitmask system works.
+func TestAppleSource_ValidBitmask(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("live IOKit test skipped in CI")
+	}
+	src := NewAppleSource()
+	if !src.Detect() {
+		t.Skip("no Apple accelerator detected")
+	}
+	src.Sample(context.Background())
+	time.Sleep(500 * time.Millisecond)
+	sample, err := src.Sample(context.Background())
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+	for _, m := range sample.Devices {
+		t.Logf("device=%s valid_util=%v valid_power=%v valid_vram=%v valid_temp=%v",
+			m.DeviceID,
+			m.IsValid(ValidUtilization),
+			m.IsValid(ValidPower),
+			m.IsValid(ValidVRAMTotal),
+			m.IsValid(ValidTemperature),
+		)
+		// GPU should have valid utilization and power
+		if m.DeviceID == "gpu0" {
+			if !m.IsValid(ValidUtilization) {
+				t.Error("gpu0 should have valid utilization")
+			}
+			if !m.IsValid(ValidPower) {
+				t.Error("gpu0 should have valid power")
+			}
+			if !m.IsValid(ValidVRAMTotal) {
+				t.Error("gpu0 should have valid VRAM total")
+			}
+			// Temperature should NOT be valid (Apple doesn't expose it)
+			if m.IsValid(ValidTemperature) {
+				t.Error("gpu0 should NOT have valid temperature (Apple doesn't expose it)")
+			}
+		}
 	}
 }
