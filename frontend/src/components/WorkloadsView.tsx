@@ -20,22 +20,29 @@ export default function WorkloadsView({ accelProcs }: Props) {
   const [classified, setClassified] = useState<Record<number, ClassifiedProc>>({});
   const [loading, setLoading] = useState(false);
   const inflight = useRef(new Set<number>());
+  const classifiedPids = useRef(new Set<number>());
 
   // Classify each accel process on arrival / pid change
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      setLoading(true);
       const pids = accelProcs.map(p => p.pid);
-      for (const pid of pids) {
+      // Only classify PIDs we haven't seen yet
+      const newPids = pids.filter(pid => !classifiedPids.current.has(pid));
+      if (newPids.length === 0) return;
+
+      setLoading(true);
+      for (const pid of newPids) {
         if (cancelled || inflight.current.has(pid)) continue;
         inflight.current.add(pid);
         try {
           const c = await ClassifyService.ClassifyPID(pid);
           if (cancelled) return;
+          classifiedPids.current.add(pid);
           setClassified(prev => ({ ...prev, [pid]: c as unknown as ClassifiedProc }));
         } catch {
           // pid vanished between telemetry and classify
+          classifiedPids.current.add(pid); // don't retry
         } finally {
           inflight.current.delete(pid);
         }
@@ -43,7 +50,11 @@ export default function WorkloadsView({ accelProcs }: Props) {
       // prune classified entries whose pid no longer appears
       setClassified(prev => {
         const keep: Record<number, ClassifiedProc> = {};
-        for (const p of accelProcs) if (prev[p.pid]) keep[p.pid] = prev[p.pid];
+        const activePids = new Set(accelProcs.map(p => p.pid));
+        for (const pid of Object.keys(prev).map(Number)) {
+          if (activePids.has(pid)) keep[pid] = prev[pid];
+          else classifiedPids.current.delete(pid); // allow re-classify if it returns
+        }
         return keep;
       });
       if (!cancelled) setLoading(false);
